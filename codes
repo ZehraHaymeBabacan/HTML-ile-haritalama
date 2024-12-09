@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IP Adres Haritalama</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.Default.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet.markercluster/dist/leaflet.markercluster.js"></script>
+    <style>
+        #map {
+            height: 600px;
+            width: 100%;
+            margin-top: 20px;
+        }
+        
+        .form-container {
+            padding: 10px;
+            background-color: white;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            width: 300px;
+        }
+        .info-box {
+            padding: 10px;
+            background-color: white;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            position: absolute;
+            top: 0px;
+            left: 10px;
+            z-index: 1000;
+        }
+        .ip-list {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f9f9f9;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            max-height: 500px;
+            overflow-y: auto;
+            width: 500px;
+        }
+        .city-ip-count {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f9f9f9;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            max-height: 500px;
+            overflow-y: auto;
+            width: 300px;
+        }
+        .error-message {
+            color: red;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <table>
+     <tr>
+      <td>
+        <div class="form-container">
+            <h3>IP Ekle</h3>
+            <h10>Lütfen IP'leri başında ve sonunda karakter olmadan giriniz.</h10>
+            <textarea id="ip-input" placeholder="Her satıra bir IP adresi girin..." rows="5" style="width: 100%;"></textarea><br><br>
+            <button id="add-ip-btn">IP'leri Ekle</button>
+            <p id="error-message" class="error-message" style="display: none;"></p> <!-- Hata mesajı için alan -->
+        </div>
+       </td>
+
+       <td>
+    <div class="info-box">
+        <strong>Toplam IP Sayısı:</strong> <span id="ip-count">0</span>
+    </div>
+        </td>
+
+            <td>
+    <div class="ip-list">
+        <strong>Eklenen IP'ler:</strong>
+        <ul id="ip-list"></ul>
+    </div>
+    </td>
+         <td>
+    <div class="city-ip-count">
+        <strong>Şehirdeki IP Sayıları:</strong>
+        <ul id="city-ip-count-list"></ul>
+    </div>
+             </td>
+            </tr>
+        </table>
+    <div id="map"></div>
+             
+    <script>
+        // Harita başlat
+        const map = L.map('map').setView([20, 0], 2); // Haritayı dünya genelinde başlat
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 18,
+            attribution: 'Map data &copy; <a href="https://www.openstreetmap.org/">OpenStreetMap</a> contributors'
+        }).addTo(map);
+
+        // IP verilerini tutacak dizi ve şehirdeki IP sayısını tutacak nesne
+        const ipData = [];
+        const cityIpCount = {};  // Şehir bazında IP sayısını tutacak nesne
+        const ipSet = new Set();  // Aynı IP'nin tekrar eklenmesini engellemek için set kullanılır
+        const markers = L.markerClusterGroup();  // Marker cluster group
+
+        // IP listesi güncelleme fonksiyonu
+        function updateIpList(ip, lat, lng, city) {
+            const ipList = document.getElementById('ip-list');
+            const listItem = document.createElement('li');
+            listItem.textContent = `${ip} - [${lat}, ${lng}] - ${city}`;
+            ipList.appendChild(listItem);
+        }
+
+        // Şehirdeki IP sayısını güncelleme fonksiyonu
+        function updateCityIpCount(city) {
+            const cityIpCountList = document.getElementById('city-ip-count-list');
+            if (!cityIpCount[city]) {
+                cityIpCount[city] = 1;
+            } else {
+                cityIpCount[city]++;
+            }
+
+            // Şehirdeki IP sayısını listeye ekle
+            cityIpCountList.innerHTML = ''; // Listeyi temizle
+            Object.keys(cityIpCount).forEach(city => {
+                const listItem = document.createElement('li');
+                listItem.textContent = `${city}: ${cityIpCount[city]} IP`;
+                cityIpCountList.appendChild(listItem);
+            });
+        }
+
+        // Toplam IP sayısını güncelleme fonksiyonu
+        function updateIpCount() {
+            document.getElementById('ip-count').textContent = ipData.length;
+        }
+
+        // IP koordinatlarını almak ve haritaya eklemek için fonksiyon
+        async function addIps(ipList) {
+            for (const ip of ipList) {
+                if (ipSet.has(ip.trim())) {
+                    // Eğer IP daha önce eklenmişse, hata mesajı göster
+                    document.getElementById('error-message').textContent = `${ip} zaten eklenmiş!`;
+                    document.getElementById('error-message').style.display = 'block';
+                    continue; // Aynı IP tekrar eklenmesin
+                }
+
+                // IP'yi set'e ekle
+                ipSet.add(ip.trim());
+
+                try {
+                    // API'ye istek gönder (ipgeolocation.io)
+                    const apiKey = "7f6a59602add4b7ab52e577b92d87cc5";  // Buraya kendi API anahtarınızı girin
+                    const response = await fetch(`https://api.ipgeolocation.io/ipgeo?apiKey=${apiKey}&ip=${ip.trim()}`);
+                    const data = await response.json();
+
+                    console.log(data); // Veriyi konsolda kontrol et
+
+                    if (data.country_name && data.city) {
+                        const lat = data.latitude;
+                        const lng = data.longitude;
+                        const city = data.city || "Bilinmiyor";  // İl bilgisi
+
+                        // Veriyi diziye ekle
+                        ipData.push({ ip, coords: [lat, lng], city });
+
+                        // IP adresine ait işaretleyiciyi haritaya ekle
+                        const marker = L.marker([lat, lng])
+                            .bindPopup(`<b>${ip}</b><br>Konum: [${lat}, ${lng}]<br>İl: ${city}`)
+                            .addTo(markers);
+
+                        // Listeye ekle, IP sayısını ve şehirdeki IP sayısını güncelle
+                        updateIpList(ip, lat, lng, city);
+                        updateIpCount();
+                        updateCityIpCount(city);
+                    } else {
+                        console.warn(`IP (${ip}) için koordinatlar alınamadı.`);
+                    }
+                } catch (error) {
+                    console.error(`API isteği sırasında bir hata oluştu: ${error}`);
+                }
+            }
+
+            // Cluster işaretleyicilerini haritaya ekle
+            map.addLayer(markers);
+        }
+
+        // "IP'leri Ekle" butonuna tıklama işlemi
+        document.getElementById('add-ip-btn').addEventListener('click', () => {
+            const ipInput = document.getElementById('ip-input').value;
+            const ipList = ipInput.split('\n').map(ip => ip.trim()).filter(ip => ip !== '');
+
+            if (ipList.length === 0) {
+                alert('Lütfen geçerli IP adresleri girin!');
+            } else {
+                document.getElementById('error-message').style.display = 'none';  // Hata mesajını gizle
+                addIps(ipList); // IP'leri ekle
+            }
+
+            // Giriş kutusunu temizle
+            document.getElementById('ip-input').value = '';
+        });
+    </script>
+</body>
+</html>
